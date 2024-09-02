@@ -2,22 +2,17 @@ package org.opentripplanner.updater.trip;
 
 import static com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship.ADDED;
 import static com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship.CANCELED;
-import static com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship.DELETED;
 import static com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship.SCHEDULED;
 import static com.google.transit.realtime.GtfsRealtime.TripUpdate.StopTimeUpdate.ScheduleRelationship.SKIPPED;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNotSame;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.opentripplanner.updater.spi.UpdateError.UpdateErrorType.NO_SERVICE_ON_DATE;
 import static org.opentripplanner.updater.trip.BackwardsDelayPropagationType.REQUIRED_NO_DATA;
-import static org.opentripplanner.updater.trip.TimetableSnapshotSourceTest.SameAssert.NotSame;
-import static org.opentripplanner.updater.trip.TimetableSnapshotSourceTest.SameAssert.Same;
+import static org.opentripplanner.updater.trip.UpdateIncrementality.DIFFERENTIAL;
 
-import com.google.protobuf.InvalidProtocolBufferException;
 import com.google.transit.realtime.GtfsRealtime.TripDescriptor;
 import com.google.transit.realtime.GtfsRealtime.TripDescriptor.ScheduleRelationship;
 import com.google.transit.realtime.GtfsRealtime.TripUpdate;
@@ -27,17 +22,14 @@ import de.mfdz.MfdzRealtimeExtensions.StopTimePropertiesExtension.DropOffPickupT
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicReference;
 import java.util.stream.Stream;
 import javax.annotation.Nonnull;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.MethodSource;
 import org.opentripplanner.ConstantsForTests;
 import org.opentripplanner.TestOtpModel;
+import org.opentripplanner._support.time.ZoneIds;
 import org.opentripplanner.framework.i18n.NonLocalizedString;
 import org.opentripplanner.framework.time.ServiceDateUtils;
 import org.opentripplanner.model.PickDrop;
@@ -57,12 +49,17 @@ import org.opentripplanner.updater.spi.UpdateSuccess.WarningType;
 public class TimetableSnapshotSourceTest {
 
   private static final LocalDate SERVICE_DATE = LocalDate.parse("2009-02-01");
+  private static final TripUpdate CANCELLATION = new TripUpdateBuilder(
+    "1.1",
+    SERVICE_DATE,
+    CANCELED,
+    ZoneIds.NEW_YORK
+  )
+    .build();
   private TransitModel transitModel;
 
   private final GtfsRealtimeFuzzyTripMatcher TRIP_MATCHER_NOOP = null;
 
-  private final boolean fullDataset = false;
-  private byte[] cancellation;
   private String feedId;
 
   @BeforeEach
@@ -71,48 +68,27 @@ public class TimetableSnapshotSourceTest {
     transitModel = model.transitModel();
 
     feedId = transitModel.getFeedIds().stream().findFirst().get();
-
-    final TripDescriptor.Builder tripDescriptorBuilder = TripDescriptor.newBuilder();
-
-    tripDescriptorBuilder.setTripId("1.1");
-    tripDescriptorBuilder.setScheduleRelationship(TripDescriptor.ScheduleRelationship.CANCELED);
-
-    final TripUpdate.Builder tripUpdateBuilder = TripUpdate.newBuilder();
-
-    tripUpdateBuilder.setTrip(tripDescriptorBuilder);
-
-    cancellation = tripUpdateBuilder.build().toByteArray();
   }
 
   @Test
-  public void testGetSnapshot() throws InvalidProtocolBufferException {
+  public void testGetSnapshot() {
     var updater = defaultUpdater();
 
     updater.applyTripUpdates(
       TRIP_MATCHER_NOOP,
       REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(TripUpdate.parseFrom(cancellation)),
+      DIFFERENTIAL,
+      List.of(CANCELLATION),
       feedId
     );
 
     final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
     assertNotNull(snapshot);
     assertSame(snapshot, updater.getTimetableSnapshot());
-
-    updater.applyTripUpdates(
-      TRIP_MATCHER_NOOP,
-      REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(TripUpdate.parseFrom(cancellation)),
-      feedId
-    );
-    assertSame(snapshot, updater.getTimetableSnapshot());
   }
 
   @Test
-  public void testGetSnapshotWithMaxSnapshotFrequencyCleared()
-    throws InvalidProtocolBufferException {
+  public void testGetSnapshotWithMaxSnapshotFrequencyCleared() {
     var updater = new TimetableSnapshotSource(
       TimetableSnapshotSourceParameters.DEFAULT.withMaxSnapshotFrequency(Duration.ofMillis(-1)),
       transitModel
@@ -123,91 +99,14 @@ public class TimetableSnapshotSourceTest {
     updater.applyTripUpdates(
       TRIP_MATCHER_NOOP,
       REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(TripUpdate.parseFrom(cancellation)),
+      DIFFERENTIAL,
+      List.of(CANCELLATION),
       feedId
     );
 
     final TimetableSnapshot newSnapshot = updater.getTimetableSnapshot();
     assertNotNull(newSnapshot);
     assertNotSame(snapshot, newSnapshot);
-  }
-
-  @Test
-  public void testHandleCanceledTrip() throws InvalidProtocolBufferException {
-    final FeedScopedId tripId = new FeedScopedId(feedId, "1.1");
-    final FeedScopedId tripId2 = new FeedScopedId(feedId, "1.2");
-    final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-    final TripPattern pattern = transitModel.getTransitModelIndex().getPatternForTrip().get(trip);
-    final int tripIndex = pattern.getScheduledTimetable().getTripIndex(tripId);
-    final int tripIndex2 = pattern.getScheduledTimetable().getTripIndex(tripId2);
-
-    var updater = new TimetableSnapshotSource(
-      TimetableSnapshotSourceParameters.DEFAULT,
-      transitModel,
-      () -> SERVICE_DATE
-    );
-
-    updater.applyTripUpdates(
-      TRIP_MATCHER_NOOP,
-      REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(TripUpdate.parseFrom(cancellation)),
-      feedId
-    );
-
-    final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
-    final Timetable forToday = snapshot.resolve(pattern, SERVICE_DATE);
-    final Timetable schedule = snapshot.resolve(pattern, null);
-    assertNotSame(forToday, schedule);
-    assertNotSame(forToday.getTripTimes(tripIndex), schedule.getTripTimes(tripIndex));
-    assertSame(forToday.getTripTimes(tripIndex2), schedule.getTripTimes(tripIndex2));
-
-    final TripTimes tripTimes = forToday.getTripTimes(tripIndex);
-
-    assertEquals(RealTimeState.CANCELED, tripTimes.getRealTimeState());
-  }
-
-  @Test
-  public void testHandleDeletedTrip() throws InvalidProtocolBufferException {
-    final FeedScopedId tripId = new FeedScopedId(feedId, "1.1");
-    final FeedScopedId tripId2 = new FeedScopedId(feedId, "1.2");
-    final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-    final TripPattern pattern = transitModel.getTransitModelIndex().getPatternForTrip().get(trip);
-    final int tripIndex = pattern.getScheduledTimetable().getTripIndex(tripId);
-    final int tripIndex2 = pattern.getScheduledTimetable().getTripIndex(tripId2);
-
-    var updater = defaultUpdater();
-
-    final TripDescriptor.Builder tripDescriptorBuilder = TripDescriptor.newBuilder();
-
-    tripDescriptorBuilder.setTripId("1.1");
-    tripDescriptorBuilder.setScheduleRelationship(ScheduleRelationship.DELETED);
-
-    final TripUpdate.Builder tripUpdateBuilder = TripUpdate.newBuilder();
-
-    tripUpdateBuilder.setTrip(tripDescriptorBuilder);
-
-    var deletion = tripUpdateBuilder.build().toByteArray();
-
-    updater.applyTripUpdates(
-      TRIP_MATCHER_NOOP,
-      REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(TripUpdate.parseFrom(deletion)),
-      feedId
-    );
-
-    final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
-    final Timetable forToday = snapshot.resolve(pattern, SERVICE_DATE);
-    final Timetable schedule = snapshot.resolve(pattern, null);
-    assertNotSame(forToday, schedule);
-    assertNotSame(forToday.getTripTimes(tripIndex), schedule.getTripTimes(tripIndex));
-    assertSame(forToday.getTripTimes(tripIndex2), schedule.getTripTimes(tripIndex2));
-
-    final TripTimes tripTimes = forToday.getTripTimes(tripIndex);
-
-    assertEquals(RealTimeState.DELETED, tripTimes.getRealTimeState());
   }
 
   /**
@@ -233,16 +132,15 @@ public class TimetableSnapshotSourceTest {
         tripUpdateBuilder.setTrip(tripDescriptorBuilder);
         var tripUpdate = tripUpdateBuilder.build();
 
-        updater.applyTripUpdates(
+        var result = updater.applyTripUpdates(
           TRIP_MATCHER_NOOP,
           REQUIRED_NO_DATA,
-          fullDataset,
+          DIFFERENTIAL,
           List.of(tripUpdate),
           feedId
         );
 
-        var snapshot = updater.getTimetableSnapshot();
-        assertNull(snapshot);
+        assertEquals(0, result.successful());
       });
   }
 
@@ -359,7 +257,7 @@ public class TimetableSnapshotSourceTest {
     updater.applyTripUpdates(
       TRIP_MATCHER_NOOP,
       REQUIRED_NO_DATA,
-      fullDataset,
+      DIFFERENTIAL,
       List.of(tripUpdate),
       feedId
     );
@@ -452,54 +350,6 @@ public class TimetableSnapshotSourceTest {
   class Scheduled {
 
     @Test
-    public void delayed() {
-      final FeedScopedId tripId = new FeedScopedId(feedId, "1.1");
-      final FeedScopedId tripId2 = new FeedScopedId(feedId, "1.2");
-      final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-      final TripPattern pattern = transitModel.getTransitModelIndex().getPatternForTrip().get(trip);
-      final int tripIndex = pattern.getScheduledTimetable().getTripIndex(tripId);
-      final int tripIndex2 = pattern.getScheduledTimetable().getTripIndex(tripId2);
-
-      var tripUpdateBuilder = new TripUpdateBuilder(
-        tripId.getId(),
-        SERVICE_DATE,
-        ScheduleRelationship.SCHEDULED,
-        transitModel.getTimeZone()
-      );
-
-      int stopSequence = 2;
-      int delay = 1;
-      tripUpdateBuilder.addDelayedStopTime(stopSequence, delay);
-
-      final TripUpdate tripUpdate = tripUpdateBuilder.build();
-
-      var updater = defaultUpdater();
-
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        fullDataset,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
-      final Timetable forToday = snapshot.resolve(pattern, SERVICE_DATE);
-      final Timetable schedule = snapshot.resolve(pattern, null);
-      assertNotSame(forToday, schedule);
-      assertNotSame(forToday.getTripTimes(tripIndex), schedule.getTripTimes(tripIndex));
-      assertSame(forToday.getTripTimes(tripIndex2), schedule.getTripTimes(tripIndex2));
-      assertEquals(1, forToday.getTripTimes(tripIndex).getArrivalDelay(1));
-      assertEquals(1, forToday.getTripTimes(tripIndex).getDepartureDelay(1));
-
-      assertEquals(RealTimeState.SCHEDULED, schedule.getTripTimes(tripIndex).getRealTimeState());
-      assertEquals(RealTimeState.UPDATED, forToday.getTripTimes(tripIndex).getRealTimeState());
-
-      assertEquals(RealTimeState.SCHEDULED, schedule.getTripTimes(tripIndex2).getRealTimeState());
-      assertEquals(RealTimeState.SCHEDULED, forToday.getTripTimes(tripIndex2).getRealTimeState());
-    }
-
-    @Test
     public void scheduled() {
       // GIVEN
 
@@ -523,7 +373,7 @@ public class TimetableSnapshotSourceTest {
       updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
@@ -577,48 +427,6 @@ public class TimetableSnapshotSourceTest {
       assertEquals(90, originalTripTimesForToday.getDepartureDelay(2));
     }
 
-    /**
-     * This test just asserts that trip with start date that is outside the service period doesn't
-     * throw an exception and is ignored instead.
-     */
-    @Test
-    public void invalidTripDate() {
-      // GIVEN
-
-      String scheduledTripId = "1.1";
-
-      var serviceDateOutsideService = SERVICE_DATE.minusYears(10);
-      var builder = new TripUpdateBuilder(
-        scheduledTripId,
-        serviceDateOutsideService,
-        SCHEDULED,
-        transitModel.getTimeZone()
-      )
-        .addDelayedStopTime(1, 0)
-        .addDelayedStopTime(2, 60, 80)
-        .addDelayedStopTime(3, 90, 90);
-
-      var tripUpdate = builder.build();
-
-      var updater = defaultUpdater();
-
-      // WHEN
-      var result = updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        fullDataset,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // THEN
-      final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
-      assertNull(snapshot);
-      assertEquals(1, result.failed());
-      var errors = result.failures();
-      assertEquals(1, errors.get(NO_SERVICE_ON_DATE).size());
-    }
-
     @Test
     public void scheduledTripWithSkippedAndNoData() {
       // GIVEN
@@ -643,7 +451,7 @@ public class TimetableSnapshotSourceTest {
       updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
@@ -749,219 +557,6 @@ public class TimetableSnapshotSourceTest {
         assertTrue(newTripTimes.isNoDataStop(2));
       }
     }
-
-    @Test
-    public void scheduledTripWithSkippedAndScheduled() {
-      // GIVEN
-
-      String scheduledTripId = "1.1";
-
-      var builder = new TripUpdateBuilder(
-        scheduledTripId,
-        SERVICE_DATE,
-        SCHEDULED,
-        transitModel.getTimeZone()
-      )
-        .addDelayedStopTime(1, 0)
-        .addSkippedStop(2)
-        .addDelayedStopTime(3, 90);
-
-      var tripUpdate = builder.build();
-
-      var updater = defaultUpdater();
-
-      // WHEN
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        fullDataset,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // THEN
-      final TimetableSnapshot snapshot = updater.getTimetableSnapshot();
-
-      // Original trip pattern
-      {
-        final FeedScopedId tripId = new FeedScopedId(feedId, scheduledTripId);
-        final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-        final TripPattern originalTripPattern = transitModel
-          .getTransitModelIndex()
-          .getPatternForTrip()
-          .get(trip);
-
-        final Timetable originalTimetableForToday = snapshot.resolve(
-          originalTripPattern,
-          SERVICE_DATE
-        );
-        final Timetable originalTimetableScheduled = snapshot.resolve(originalTripPattern, null);
-
-        assertNotSame(originalTimetableForToday, originalTimetableScheduled);
-
-        final int originalTripIndexForToday = originalTimetableForToday.getTripIndex(tripId);
-        final TripTimes originalTripTimesForToday = originalTimetableForToday.getTripTimes(
-          originalTripIndexForToday
-        );
-        assertTrue(
-          originalTripTimesForToday.isDeleted(),
-          "Original trip times should be deleted in time table for service date"
-        );
-        // original trip should be canceled
-        assertEquals(RealTimeState.DELETED, originalTripTimesForToday.getRealTimeState());
-      }
-
-      // New trip pattern
-      {
-        final TripPattern newTripPattern = snapshot.getRealtimeAddedTripPattern(
-          new FeedScopedId(feedId, scheduledTripId),
-          SERVICE_DATE
-        );
-
-        final Timetable newTimetableForToday = snapshot.resolve(newTripPattern, SERVICE_DATE);
-        final Timetable newTimetableScheduled = snapshot.resolve(newTripPattern, null);
-
-        assertNotSame(newTimetableForToday, newTimetableScheduled);
-
-        assertTrue(newTripPattern.canBoard(0));
-        assertFalse(newTripPattern.canBoard(1));
-        assertTrue(newTripPattern.canBoard(2));
-
-        final int newTimetableForTodayModifiedTripIndex = newTimetableForToday.getTripIndex(
-          scheduledTripId
-        );
-
-        var newTripTimes = newTimetableForToday.getTripTimes(newTimetableForTodayModifiedTripIndex);
-        assertEquals(RealTimeState.UPDATED, newTripTimes.getRealTimeState());
-
-        assertEquals(
-          -1,
-          newTimetableScheduled.getTripIndex(scheduledTripId),
-          "New trip should not be found in scheduled time table"
-        );
-
-        assertEquals(0, newTripTimes.getArrivalDelay(0));
-        assertEquals(0, newTripTimes.getDepartureDelay(0));
-        assertEquals(45, newTripTimes.getArrivalDelay(1));
-        assertEquals(45, newTripTimes.getDepartureDelay(1));
-        assertEquals(90, newTripTimes.getArrivalDelay(2));
-        assertEquals(90, newTripTimes.getDepartureDelay(2));
-        assertFalse(newTripTimes.isCancelledStop(0));
-        assertTrue(newTripTimes.isCancelledStop(1));
-        assertFalse(newTripTimes.isNoDataStop(2));
-      }
-    }
-
-    @Test
-    public void scheduledTripWithPreviouslySkipped() {
-      // Create update with a skipped stop at first
-      String scheduledTripId = "1.1";
-
-      var skippedBuilder = new TripUpdateBuilder(
-        scheduledTripId,
-        SERVICE_DATE,
-        SCHEDULED,
-        transitModel.getTimeZone()
-      )
-        .addDelayedStopTime(1, 0)
-        .addSkippedStop(2)
-        .addDelayedStopTime(3, 90);
-
-      var tripUpdate = skippedBuilder.build();
-
-      var updater = defaultUpdater();
-
-      // apply the update with a skipped stop
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        false,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // Force a snapshot commit. This is done to mimic normal behaviour where a new update arrives
-      // after the original snapshot has been committed
-      updater.getTimetableSnapshot(true);
-
-      // Create update to the same trip but now the skipped stop is no longer skipped
-      var scheduledBuilder = new TripUpdateBuilder(
-        scheduledTripId,
-        SERVICE_DATE,
-        SCHEDULED,
-        transitModel.getTimeZone()
-      )
-        .addDelayedStopTime(1, 0)
-        .addDelayedStopTime(2, 60, 80)
-        .addDelayedStopTime(3, 90, 90);
-
-      tripUpdate = scheduledBuilder.build();
-
-      // apply the update with the previously skipped stop now scheduled
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        false,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // Check that the there is no longer a realtime added trip pattern for the trip and that the
-      // stoptime updates have gone through
-      var snapshot = updater.getTimetableSnapshot(true);
-      {
-        final TripPattern newTripPattern = snapshot.getRealtimeAddedTripPattern(
-          new FeedScopedId(feedId, scheduledTripId),
-          SERVICE_DATE
-        );
-        assertNull(newTripPattern);
-
-        final FeedScopedId tripId = new FeedScopedId(feedId, scheduledTripId);
-        final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-        final TripPattern originalTripPattern = transitModel
-          .getTransitModelIndex()
-          .getPatternForTrip()
-          .get(trip);
-
-        final Timetable originalTimetableForToday = snapshot.resolve(
-          originalTripPattern,
-          SERVICE_DATE
-        );
-        final Timetable originalTimetableScheduled = snapshot.resolve(originalTripPattern, null);
-
-        assertNotSame(originalTimetableForToday, originalTimetableScheduled);
-
-        final int originalTripIndexScheduled = originalTimetableScheduled.getTripIndex(tripId);
-        assertTrue(
-          originalTripIndexScheduled > -1,
-          "Original trip should be found in scheduled time table"
-        );
-        final TripTimes originalTripTimesScheduled = originalTimetableScheduled.getTripTimes(
-          originalTripIndexScheduled
-        );
-        assertFalse(
-          originalTripTimesScheduled.isCanceledOrDeleted(),
-          "Original trip times should not be canceled in scheduled time table"
-        );
-        assertEquals(RealTimeState.SCHEDULED, originalTripTimesScheduled.getRealTimeState());
-
-        final int originalTripIndexForToday = originalTimetableForToday.getTripIndex(tripId);
-        assertTrue(
-          originalTripIndexForToday > -1,
-          "Original trip should be found in time table for service date"
-        );
-        final TripTimes originalTripTimesForToday = originalTimetableForToday.getTripTimes(
-          originalTripIndexForToday
-        );
-        assertEquals(RealTimeState.UPDATED, originalTripTimesForToday.getRealTimeState());
-        assertEquals(0, originalTripTimesForToday.getArrivalDelay(0));
-        assertEquals(0, originalTripTimesForToday.getDepartureDelay(0));
-        assertEquals(60, originalTripTimesForToday.getArrivalDelay(1));
-        assertEquals(80, originalTripTimesForToday.getDepartureDelay(1));
-        assertEquals(90, originalTripTimesForToday.getArrivalDelay(2));
-        assertEquals(90, originalTripTimesForToday.getDepartureDelay(2));
-      }
-    }
   }
 
   @Nested
@@ -988,24 +583,23 @@ public class TimetableSnapshotSourceTest {
       updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
 
       // THEN
-      assertAddedTrip(SERVICE_DATE, this.addedTripId, updater, false);
+      assertAddedTrip(SERVICE_DATE, this.addedTripId, updater);
     }
 
     private TripPattern assertAddedTrip(
       LocalDate serviceDate,
       String tripId,
-      TimetableSnapshotSource updater,
-      boolean forceSnapshotCommit
+      TimetableSnapshotSource updater
     ) {
       var stopA = transitModel.getStopModel().getRegularStop(new FeedScopedId(feedId, "A"));
-      // Get trip pattern of last (most recently added) outgoing edge
-      var snapshot = updater.getTimetableSnapshot(forceSnapshotCommit);
+      // Get the trip pattern of the added trip which goes through stopA
+      var snapshot = updater.getTimetableSnapshot();
       var patternsAtA = snapshot.getPatternsForStop(stopA);
 
       assertNotNull(patternsAtA, "Added trip pattern should be found");
@@ -1058,7 +652,7 @@ public class TimetableSnapshotSourceTest {
       var result = updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
@@ -1067,7 +661,7 @@ public class TimetableSnapshotSourceTest {
 
       assertTrue(result.warnings().isEmpty());
 
-      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater, false);
+      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater);
 
       var route = pattern.getRoute();
       assertEquals(TripUpdateBuilder.ROUTE_URL, route.getUrl());
@@ -1109,7 +703,7 @@ public class TimetableSnapshotSourceTest {
       var result = updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
@@ -1120,7 +714,7 @@ public class TimetableSnapshotSourceTest {
 
       assertEquals(List.of(WarningType.UNKNOWN_STOPS_REMOVED_FROM_ADDED_TRIP), result.warnings());
 
-      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater, false);
+      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater);
 
       assertEquals(2, pattern.getStops().size());
     }
@@ -1151,22 +745,22 @@ public class TimetableSnapshotSourceTest {
       updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
-      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater, false);
+      var pattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater);
       var firstRoute = pattern.getRoute();
 
       // apply the update a second time to check that no new route instance is created but the old one is reused
       updater.applyTripUpdates(
         TRIP_MATCHER_NOOP,
         REQUIRED_NO_DATA,
-        fullDataset,
+        DIFFERENTIAL,
         List.of(tripUpdate),
         feedId
       );
-      var secondPattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater, false);
+      var secondPattern = assertAddedTrip(SERVICE_DATE, addedTripId, updater);
       var secondRoute = secondPattern.getRoute();
 
       // THEN
@@ -1174,200 +768,14 @@ public class TimetableSnapshotSourceTest {
       assertSame(firstRoute, secondRoute);
       assertNotNull(transitModel.getTransitModelIndex().getRouteForId(firstRoute.getId()));
     }
-
-    static List<Arguments> addedRemovalTestCase() {
-      return List.of(
-        // TODO we might want to change the behaviour so that only the trip without pattern is
-        // persisted if the added trip is cancelled
-        Arguments.of(CANCELED, RealTimeState.CANCELED),
-        Arguments.of(DELETED, RealTimeState.DELETED)
-      );
-    }
-
-    @ParameterizedTest
-    @MethodSource("addedRemovalTestCase")
-    public void cancelingAddedTrip(
-      ScheduleRelationship scheduleRelationship,
-      RealTimeState expectedState
-    ) {
-      var builder = new TripUpdateBuilder(
-        addedTripId,
-        SERVICE_DATE,
-        ADDED,
-        transitModel.getTimeZone()
-      );
-
-      builder.addStopTime("A", 30).addStopTime("C", 40).addStopTime("E", 55);
-
-      var tripUpdate = builder.build();
-
-      var updater = defaultUpdater();
-
-      // WHEN
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        fullDataset,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // THEN
-      assertAddedTrip(SERVICE_DATE, this.addedTripId, updater, true);
-
-      builder = new TripUpdateBuilder(addedTripId, SERVICE_DATE, ADDED, transitModel.getTimeZone());
-
-      var tripDescriptorBuilder = TripDescriptor.newBuilder();
-      tripDescriptorBuilder.setTripId(addedTripId);
-      tripDescriptorBuilder.setScheduleRelationship(scheduleRelationship);
-
-      tripDescriptorBuilder.setStartDate(ServiceDateUtils.asCompactString(SERVICE_DATE));
-      tripUpdate = TripUpdate.newBuilder().setTrip(tripDescriptorBuilder).build();
-
-      // WHEN
-      updater.applyTripUpdates(
-        TRIP_MATCHER_NOOP,
-        REQUIRED_NO_DATA,
-        fullDataset,
-        List.of(tripUpdate),
-        feedId
-      );
-
-      // THEN
-      // Get trip pattern of last (most recently added) outgoing edge
-      var snapshot = updater.getTimetableSnapshot(true);
-      var stopA = transitModel.getStopModel().getRegularStop(new FeedScopedId(feedId, "A"));
-      var patternsAtA = snapshot.getPatternsForStop(stopA);
-
-      assertNotNull(patternsAtA, "Added trip pattern should be found");
-      var tripPattern = patternsAtA.stream().findFirst().get();
-
-      final Timetable forToday = snapshot.resolve(tripPattern, SERVICE_DATE);
-      final Timetable schedule = snapshot.resolve(tripPattern, null);
-
-      assertNotSame(forToday, schedule);
-
-      final int forTodayAddedTripIndex = forToday.getTripIndex(addedTripId);
-      assertTrue(
-        forTodayAddedTripIndex > -1,
-        "Added trip should not be found in time table for service date"
-      );
-      assertEquals(expectedState, forToday.getTripTimes(forTodayAddedTripIndex).getRealTimeState());
-
-      final int scheduleTripIndex = schedule.getTripIndex(addedTripId);
-      assertEquals(-1, scheduleTripIndex, "Added trip should not be found in scheduled time table");
-    }
   }
 
   @Nonnull
   private TimetableSnapshotSource defaultUpdater() {
     return new TimetableSnapshotSource(
-      TimetableSnapshotSourceParameters.DEFAULT,
+      new TimetableSnapshotSourceParameters(Duration.ZERO, true),
       transitModel,
       () -> SERVICE_DATE
     );
-  }
-
-  enum SameAssert {
-    Same {
-      public void test(Object a, Object b) {
-        assertSame(a, b);
-      }
-    },
-    NotSame {
-      public void test(Object a, Object b) {
-        assertNotSame(a, b);
-      }
-    };
-
-    abstract void test(Object a, Object b);
-
-    SameAssert not() {
-      return this == Same ? NotSame : Same;
-    }
-  }
-
-  static Stream<Arguments> purgeExpiredDataTestCases() {
-    return Stream.of(
-      // purgeExpiredData   maxSnapshotFrequency || snapshots PatternSnapshotA  PatternSnapshotB
-      Arguments.of(Boolean.TRUE, -1, NotSame, NotSame),
-      Arguments.of(Boolean.FALSE, -1, NotSame, Same),
-      Arguments.of(Boolean.TRUE, 1000, NotSame, NotSame),
-      Arguments.of(Boolean.FALSE, 1000, Same, Same)
-    );
-  }
-
-  @ParameterizedTest(name = "purgeExpired: {0}, maxFrequency: {1}  ||  {2}  {3}")
-  @MethodSource("purgeExpiredDataTestCases")
-  public void testPurgeExpiredData(
-    boolean purgeExpiredData,
-    int maxSnapshotFrequency,
-    SameAssert expSnapshots,
-    SameAssert expPatternAeqB
-  ) {
-    final FeedScopedId tripId = new FeedScopedId(feedId, "1.1");
-    final Trip trip = transitModel.getTransitModelIndex().getTripForId().get(tripId);
-    final TripPattern pattern = transitModel.getTransitModelIndex().getPatternForTrip().get(trip);
-
-    // We will simulate the clock turning midnight into tomorrow, data on
-    // yesterday is candidate to expire
-    final LocalDate yesterday = SERVICE_DATE.minusDays(1);
-    final LocalDate tomorrow = SERVICE_DATE.plusDays(1);
-    final AtomicReference<LocalDate> clock = new AtomicReference<>(yesterday);
-
-    var tripDescriptorBuilder = TripDescriptor.newBuilder();
-    tripDescriptorBuilder.setTripId("1.1");
-    tripDescriptorBuilder.setScheduleRelationship(ScheduleRelationship.CANCELED);
-
-    tripDescriptorBuilder.setStartDate(ServiceDateUtils.asCompactString(yesterday));
-    var tripUpdateYesterday = TripUpdate.newBuilder().setTrip(tripDescriptorBuilder).build();
-
-    // Update pattern on today, even if the time the update is performed is tomorrow
-    tripDescriptorBuilder.setStartDate(ServiceDateUtils.asCompactString(SERVICE_DATE));
-    var tripUpdateToday = TripUpdate.newBuilder().setTrip(tripDescriptorBuilder).build();
-
-    var updater = new TimetableSnapshotSource(
-      TimetableSnapshotSourceParameters.DEFAULT
-        .withPurgeExpiredData(purgeExpiredData)
-        .withMaxSnapshotFrequency(Duration.ofMillis(maxSnapshotFrequency)),
-      transitModel,
-      clock::get
-    );
-
-    // Apply update when clock is yesterday
-    updater.applyTripUpdates(
-      TRIP_MATCHER_NOOP,
-      REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(tripUpdateYesterday),
-      feedId
-    );
-
-    final TimetableSnapshot snapshotA = updater.getTimetableSnapshot();
-
-    // Turn the clock to tomorrow
-    clock.set(tomorrow);
-
-    updater.applyTripUpdates(
-      TRIP_MATCHER_NOOP,
-      REQUIRED_NO_DATA,
-      fullDataset,
-      List.of(tripUpdateToday),
-      feedId
-    );
-    final TimetableSnapshot snapshotB = updater.getTimetableSnapshot();
-
-    expSnapshots.test(snapshotA, snapshotB);
-    expPatternAeqB.test(
-      snapshotA.resolve(pattern, yesterday),
-      snapshotB.resolve(pattern, yesterday)
-    );
-    expPatternAeqB
-      .not()
-      .test(snapshotB.resolve(pattern, null), snapshotB.resolve(pattern, yesterday));
-
-    // Expect the same results regardless of the config for these
-    assertNotSame(snapshotA.resolve(pattern, null), snapshotA.resolve(pattern, yesterday));
-    assertSame(snapshotA.resolve(pattern, null), snapshotB.resolve(pattern, null));
   }
 }

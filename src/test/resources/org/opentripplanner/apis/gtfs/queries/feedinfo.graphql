@@ -1,10 +1,12 @@
 {
-    feeds {
-        agencies {
-	    name
-	    url
-	}
-	publisherUrl
-	publisherName
+  feeds {
+    agencies {
+      name
+      url
     }
+    publisher {
+      name
+      url
+    }
+  }
 }

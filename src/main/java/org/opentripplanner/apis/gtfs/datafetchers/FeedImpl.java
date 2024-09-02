@@ -9,6 +9,7 @@ import java.util.stream.Collectors;
 import org.opentripplanner.apis.gtfs.GraphQLRequestContext;
 import org.opentripplanner.apis.gtfs.generated.GraphQLDataFetchers;
 import org.opentripplanner.apis.gtfs.generated.GraphQLTypes;
+import org.opentripplanner.apis.gtfs.model.FeedPublisher;
 import org.opentripplanner.routing.alertpatch.EntitySelector;
 import org.opentripplanner.routing.alertpatch.TransitAlert;
 import org.opentripplanner.routing.services.TransitAlertService;
@@ -65,18 +66,13 @@ public class FeedImpl implements GraphQLDataFetchers.GraphQLFeed {
   }
 
   @Override
-  public DataFetcher<String> publisherName() {
+  public DataFetcher<FeedPublisher> publisher() {
     return environment -> {
       String id = getSource(environment);
-      return getTransitService(environment).getFeedInfo(id).getPublisherName();
-    };
-  }
-
-  @Override
-  public DataFetcher<String> publisherUrl() {
-    return environment -> {
-      String id = getSource(environment);
-      return getTransitService(environment).getFeedInfo(id).getPublisherUrl();
+      return new FeedPublisher(
+        getTransitService(environment).getFeedInfo(id).getPublisherName(),
+        getTransitService(environment).getFeedInfo(id).getPublisherUrl()
+      );
     };
   }
 

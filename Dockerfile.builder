@@ -1,8 +1,6 @@
 FROM maven:3-eclipse-temurin-21
 MAINTAINER Reittiopas version: 0.1
 
-ARG SKIP_TESTS
-
 ENV OTP_ROOT="/opt/opentripplanner"
 
 WORKDIR ${OTP_ROOT}
@@ -15,4 +13,4 @@ ADD test ${OTP_ROOT}/test
 add .git ${OTP_ROOT}/.git
 
 # Build OTP
-RUN if [ "$SKIP_TESTS" ]; then mvn package -DskipTests; else mvn package; fi
+RUN mvn package

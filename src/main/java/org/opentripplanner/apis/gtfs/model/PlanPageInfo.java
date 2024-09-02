@@ -49,8 +49,8 @@ public class PlanPageInfo {
   @Override
   public int hashCode() {
     return Objects.hash(
-      startCursor.getValue(),
-      endCursor.getValue(),
+      startCursor == null ? null : startCursor.getValue(),
+      endCursor == null ? null : endCursor.getValue(),
       hasPreviousPage,
       hasNextPage,
       searchWindowUsed
@@ -67,11 +67,21 @@ public class PlanPageInfo {
     }
     PlanPageInfo that = (PlanPageInfo) o;
     return (
-      Objects.equals(startCursor.getValue(), that.startCursor.getValue()) &&
-      Objects.equals(endCursor.getValue(), that.endCursor.getValue()) &&
+      equalsCursors(startCursor, that.startCursor) &&
+      equalsCursors(endCursor, that.endCursor) &&
       Objects.equals(searchWindowUsed, that.searchWindowUsed) &&
       hasPreviousPage == that.hasPreviousPage &&
       hasNextPage == that.hasNextPage
+    );
+  }
+
+  /**
+   * Only checks that the values of the cursors are equal and ignores rest of the fields.
+   */
+  private static boolean equalsCursors(ConnectionCursor a, ConnectionCursor b) {
+    return (
+      (a == null && b == null) ||
+      (a != null && b != null && Objects.equals(a.getValue(), b.getValue()))
     );
   }
 }

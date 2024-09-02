@@ -21,6 +21,7 @@ import org.opentripplanner.apis.gtfs.generated.GraphQLTypes.GraphQLOccupancyStat
 import org.opentripplanner.apis.gtfs.generated.GraphQLTypes.GraphQLRelativeDirection;
 import org.opentripplanner.apis.gtfs.generated.GraphQLTypes.GraphQLRoutingErrorCode;
 import org.opentripplanner.apis.gtfs.generated.GraphQLTypes.GraphQLTransitMode;
+import org.opentripplanner.apis.gtfs.model.FeedPublisher;
 import org.opentripplanner.apis.gtfs.model.PlanPageInfo;
 import org.opentripplanner.apis.gtfs.model.RideHailingProvider;
 import org.opentripplanner.apis.gtfs.model.StopPosition;
@@ -57,12 +58,15 @@ import org.opentripplanner.service.vehiclerental.model.RentalVehicleTypeCount;
 import org.opentripplanner.service.vehiclerental.model.VehicleRentalPlace;
 import org.opentripplanner.service.vehiclerental.model.VehicleRentalStation;
 import org.opentripplanner.service.vehiclerental.model.VehicleRentalStationUris;
+import org.opentripplanner.service.vehiclerental.model.VehicleRentalSystem;
 import org.opentripplanner.service.vehiclerental.model.VehicleRentalVehicle;
 import org.opentripplanner.transit.model.basic.Money;
 import org.opentripplanner.transit.model.network.Route;
 import org.opentripplanner.transit.model.network.TripPattern;
 import org.opentripplanner.transit.model.organization.Agency;
 import org.opentripplanner.transit.model.timetable.Trip;
+import org.opentripplanner.transit.model.timetable.booking.BookingInfo;
+import org.opentripplanner.transit.model.timetable.booking.BookingTime;
 
 public class GraphQLDataFetchers {
 
@@ -212,9 +216,9 @@ public class GraphQLDataFetchers {
 
     public DataFetcher<String> dropOffMessage();
 
-    public DataFetcher<org.opentripplanner.model.BookingTime> earliestBookingTime();
+    public DataFetcher<BookingTime> earliestBookingTime();
 
-    public DataFetcher<org.opentripplanner.model.BookingTime> latestBookingTime();
+    public DataFetcher<BookingTime> latestBookingTime();
 
     public DataFetcher<Long> maximumBookingNoticeSeconds();
 
@@ -393,9 +397,14 @@ public class GraphQLDataFetchers {
 
     public DataFetcher<String> feedId();
 
-    public DataFetcher<String> publisherName();
+    public DataFetcher<FeedPublisher> publisher();
+  }
 
-    public DataFetcher<String> publisherUrl();
+  /** Feed publisher information */
+  public interface GraphQLFeedPublisher {
+    public DataFetcher<String> name();
+
+    public DataFetcher<String> url();
   }
 
   public interface GraphQLGeometry {
@@ -455,7 +464,7 @@ public class GraphQLDataFetchers {
 
     public DataFetcher<Double> distance();
 
-    public DataFetcher<org.opentripplanner.model.BookingInfo> dropOffBookingInfo();
+    public DataFetcher<BookingInfo> dropOffBookingInfo();
 
     public DataFetcher<String> dropoffType();
 
@@ -487,7 +496,7 @@ public class GraphQLDataFetchers {
 
     public DataFetcher<Iterable<Leg>> nextLegs();
 
-    public DataFetcher<org.opentripplanner.model.BookingInfo> pickupBookingInfo();
+    public DataFetcher<BookingInfo> pickupBookingInfo();
 
     public DataFetcher<String> pickupType();
 
@@ -843,6 +852,8 @@ public class GraphQLDataFetchers {
     public DataFetcher<String> network();
 
     public DataFetcher<Boolean> operative();
+
+    public DataFetcher<VehicleRentalSystem> rentalNetwork();
 
     public DataFetcher<VehicleRentalStationUris> rentalUris();
 
@@ -1258,6 +1269,17 @@ public class GraphQLDataFetchers {
     public DataFetcher<String> vehicleId();
   }
 
+  /**
+   * Vehicle rental network, which is referred as system in the GBFS terminology. Note, the same operator can operate in multiple
+   * regions either with the same network/system or with a different one. This can contain information about either the rental brand
+   * or about the operator.
+   */
+  public interface GraphQLVehicleRentalNetwork {
+    public DataFetcher<String> networkId();
+
+    public DataFetcher<String> url();
+  }
+
   /** Vehicle rental station represents a location where users can rent bicycles etc. for a fee. */
   public interface GraphQLVehicleRentalStation {
     public DataFetcher<Boolean> allowDropoff();
@@ -1289,6 +1311,8 @@ public class GraphQLDataFetchers {
     public DataFetcher<Boolean> operative();
 
     public DataFetcher<Boolean> realtime();
+
+    public DataFetcher<VehicleRentalSystem> rentalNetwork();
 
     public DataFetcher<VehicleRentalStationUris> rentalUris();
 
