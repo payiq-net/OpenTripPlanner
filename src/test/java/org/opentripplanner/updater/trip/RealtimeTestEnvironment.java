@@ -12,13 +12,14 @@ import java.util.Objects;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import org.opentripplanner.DateTimeHelper;
-import org.opentripplanner.ext.siri.SiriFuzzyTripMatcher;
 import org.opentripplanner.ext.siri.SiriTimetableSnapshotSource;
 import org.opentripplanner.ext.siri.updater.EstimatedTimetableHandler;
+import org.opentripplanner.framework.i18n.I18NString;
 import org.opentripplanner.graph_builder.issue.api.DataImportIssueStore;
 import org.opentripplanner.model.StopTime;
 import org.opentripplanner.model.TimetableSnapshot;
 import org.opentripplanner.model.calendar.CalendarServiceData;
+import org.opentripplanner.routing.graph.Graph;
 import org.opentripplanner.transit.model._data.TransitModelForTest;
 import org.opentripplanner.transit.model.framework.Deduplicator;
 import org.opentripplanner.transit.model.framework.FeedScopedId;
@@ -36,6 +37,7 @@ import org.opentripplanner.transit.service.DefaultTransitService;
 import org.opentripplanner.transit.service.StopModel;
 import org.opentripplanner.transit.service.TransitModel;
 import org.opentripplanner.transit.service.TransitService;
+import org.opentripplanner.updater.DefaultRealTimeUpdateContext;
 import org.opentripplanner.updater.TimetableSnapshotSourceParameters;
 import org.opentripplanner.updater.spi.UpdateResult;
 import uk.org.siri.siri20.EstimatedTimetableDeliveryStructure;
@@ -55,16 +57,19 @@ public final class RealtimeTestEnvironment {
   );
   public static final LocalDate SERVICE_DATE = LocalDate.of(2024, 5, 8);
   public static final FeedScopedId SERVICE_ID = TransitModelForTest.id("CAL_1");
+  public static final String STOP_A1_ID = "A1";
+  public static final String STOP_B1_ID = "B1";
+  public static final String STOP_C1_ID = "C1";
   private final TransitModelForTest testModel = TransitModelForTest.of();
   public final ZoneId timeZone = ZoneId.of(TransitModelForTest.TIME_ZONE_ID);
   public final Station stationA = testModel.station("A").build();
   public final Station stationB = testModel.station("B").build();
   public final Station stationC = testModel.station("C").build();
   public final Station stationD = testModel.station("D").build();
-  public final RegularStop stopA1 = testModel.stop("A1").withParentStation(stationA).build();
-  public final RegularStop stopB1 = testModel.stop("B1").withParentStation(stationB).build();
+  public final RegularStop stopA1 = testModel.stop(STOP_A1_ID).withParentStation(stationA).build();
+  public final RegularStop stopB1 = testModel.stop(STOP_B1_ID).withParentStation(stationB).build();
   public final RegularStop stopB2 = testModel.stop("B2").withParentStation(stationB).build();
-  public final RegularStop stopC1 = testModel.stop("C1").withParentStation(stationC).build();
+  public final RegularStop stopC1 = testModel.stop(STOP_C1_ID).withParentStation(stationC).build();
   public final RegularStop stopD1 = testModel.stop("D1").withParentStation(stationD).build();
   public final StopModel stopModel = testModel
     .stopModelBuilder()
@@ -110,12 +115,20 @@ public final class RealtimeTestEnvironment {
     Route route1 = TransitModelForTest.route(route1Id).build();
 
     trip1 =
-      createTrip("TestTrip1", route1, List.of(new Stop(stopA1, 10, 11), new Stop(stopB1, 20, 21)));
+      createTrip(
+        "TestTrip1",
+        route1,
+        List.of(new StopCall(stopA1, 10, 11), new StopCall(stopB1, 20, 21))
+      );
     trip2 =
       createTrip(
         "TestTrip2",
         route1,
-        List.of(new Stop(stopA1, 60, 61), new Stop(stopB1, 70, 71), new Stop(stopC1, 80, 81))
+        List.of(
+          new StopCall(stopA1, 60, 61),
+          new StopCall(stopB1, 70, 71),
+          new StopCall(stopC1, 80, 81)
+        )
       );
 
     CalendarServiceData calendarServiceData = new CalendarServiceData();
@@ -168,12 +181,7 @@ public final class RealtimeTestEnvironment {
   }
 
   private EstimatedTimetableHandler getEstimatedTimetableHandler(boolean fuzzyMatching) {
-    return new EstimatedTimetableHandler(
-      siriSource,
-      fuzzyMatching ? new SiriFuzzyTripMatcher(getTransitService()) : null,
-      getTransitService(),
-      getFeedId()
-    );
+    return new EstimatedTimetableHandler(siriSource, fuzzyMatching, getFeedId());
   }
 
   public TripPattern getPatternForTrip(FeedScopedId tripId) {
@@ -205,7 +213,7 @@ public final class RealtimeTestEnvironment {
   }
 
   public TripPattern getPatternForTrip(Trip trip) {
-    return transitModel.getTransitModelIndex().getPatternForTrip().get(trip);
+    return getTransitService().getPatternForTrip(trip);
   }
 
   public TimetableSnapshot getTimetableSnapshot() {
@@ -272,13 +280,15 @@ public final class RealtimeTestEnvironment {
     UpdateIncrementality incrementality
   ) {
     Objects.requireNonNull(gtfsSource, "Test environment is configured for SIRI only");
-    return gtfsSource.applyTripUpdates(
+    UpdateResult updateResult = gtfsSource.applyTripUpdates(
       null,
       BackwardsDelayPropagationType.REQUIRED_NO_DATA,
       incrementality,
       updates,
       getFeedId()
     );
+    commitTimetableSnapshot();
+    return updateResult;
   }
 
   // private methods
@@ -288,11 +298,36 @@ public final class RealtimeTestEnvironment {
     boolean fuzzyMatching
   ) {
     Objects.requireNonNull(siriSource, "Test environment is configured for GTFS-RT only");
-    return getEstimatedTimetableHandler(fuzzyMatching).applyUpdate(updates, DIFFERENTIAL);
+    UpdateResult updateResult = getEstimatedTimetableHandler(fuzzyMatching)
+      .applyUpdate(
+        updates,
+        DIFFERENTIAL,
+        new DefaultRealTimeUpdateContext(
+          new Graph(),
+          transitModel,
+          siriSource.getTimetableSnapshotBuffer()
+        )
+      );
+    commitTimetableSnapshot();
+    return updateResult;
   }
 
-  private Trip createTrip(String id, Route route, List<Stop> stops) {
-    var trip = Trip.of(id(id)).withRoute(route).withServiceId(SERVICE_ID).build();
+  private void commitTimetableSnapshot() {
+    if (siriSource != null) {
+      siriSource.flushBuffer();
+    }
+    if (gtfsSource != null) {
+      gtfsSource.flushBuffer();
+    }
+  }
+
+  private Trip createTrip(String id, Route route, List<StopCall> stops) {
+    var trip = Trip
+      .of(id(id))
+      .withRoute(route)
+      .withHeadsign(I18NString.of("Headsign of %s".formatted(id)))
+      .withServiceId(SERVICE_ID)
+      .build();
 
     var tripOnServiceDate = TripOnServiceDate
       .of(trip.getId())
@@ -314,7 +349,7 @@ public final class RealtimeTestEnvironment {
 
     final TripPattern pattern = TransitModelForTest
       .tripPattern(id + "Pattern", route)
-      .withStopPattern(TransitModelForTest.stopPattern(stops.stream().map(Stop::stop).toList()))
+      .withStopPattern(TransitModelForTest.stopPattern(stops.stream().map(StopCall::stop).toList()))
       .build();
     pattern.add(tripTimes);
 
@@ -339,5 +374,5 @@ public final class RealtimeTestEnvironment {
     return st;
   }
 
-  protected record Stop(RegularStop stop, int arrivalTime, int departureTime) {}
+  private record StopCall(RegularStop stop, int arrivalTime, int departureTime) {}
 }

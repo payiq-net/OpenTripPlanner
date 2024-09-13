@@ -6,7 +6,7 @@
 site_name: OpenTripPlanner 2
 site_url: https://docs.opentripplanner.org
 repo_url: https://github.com/opentripplanner/OpenTripPlanner
-docs_dir: docs
+docs_dir: doc/user
 site_dir: target/mkdocs
 strict: true
 
@@ -73,6 +73,12 @@ nav:
 - Configuration:
     - Introduction: 'Configuration.md'
     - Build: 'BuildConfiguration.md'
+    - OSM Tag Mapping:
+        - Default: 'osm/Default.md'
+        - Finland: 'osm/Finland.md'
+        - Germany: 'osm/Germany.md'
+        - Norway: 'osm/Norway.md'
+        - UK: 'osm/UK.md'
     - Router: 'RouterConfiguration.md'
     - "Route Request": 'RouteRequest.md'
     - "Realtime Updaters": 'UpdaterConfig.md'
@@ -90,7 +96,6 @@ nav:
     - "Developers' Guide": 'Developers-Guide.md'
     - Localization: 'Localization.md'
     - Bibliography: 'Bibliography.md'
-    - Codestyle: 'Codestyle.md'
     - Sandbox Development: 'SandboxExtension.md'
     - Release Checklist: 'ReleaseChecklist.md'
 - Sandbox:

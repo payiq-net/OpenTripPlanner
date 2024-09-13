@@ -2,6 +2,7 @@ package org.opentripplanner.updater.configure;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import org.opentripplanner.ext.siri.SiriTimetableSnapshotSource;
 import org.opentripplanner.ext.siri.updater.SiriETUpdater;
 import org.opentripplanner.ext.siri.updater.SiriSXUpdater;
@@ -11,25 +12,28 @@ import org.opentripplanner.ext.siri.updater.google.SiriETGooglePubsubUpdater;
 import org.opentripplanner.ext.vehiclerentalservicedirectory.VehicleRentalServiceDirectoryFetcher;
 import org.opentripplanner.ext.vehiclerentalservicedirectory.api.VehicleRentalServiceDirectoryFetcherParameters;
 import org.opentripplanner.framework.io.OtpHttpClientFactory;
+import org.opentripplanner.model.TimetableSnapshot;
 import org.opentripplanner.model.calendar.openinghours.OpeningHoursCalendarService;
 import org.opentripplanner.routing.graph.Graph;
 import org.opentripplanner.service.realtimevehicles.RealtimeVehicleRepository;
 import org.opentripplanner.service.vehiclerental.VehicleRentalRepository;
 import org.opentripplanner.transit.service.TransitModel;
+import org.opentripplanner.updater.DefaultRealTimeUpdateContext;
 import org.opentripplanner.updater.GraphUpdaterManager;
 import org.opentripplanner.updater.UpdatersParameters;
 import org.opentripplanner.updater.alert.GtfsRealtimeAlertsUpdater;
 import org.opentripplanner.updater.spi.GraphUpdater;
+import org.opentripplanner.updater.spi.TimetableSnapshotFlush;
 import org.opentripplanner.updater.trip.MqttGtfsRealtimeUpdater;
 import org.opentripplanner.updater.trip.PollingTripUpdater;
 import org.opentripplanner.updater.trip.TimetableSnapshotSource;
+import org.opentripplanner.updater.vehicle_parking.AvailabilityDatasourceFactory;
+import org.opentripplanner.updater.vehicle_parking.VehicleParkingAvailabilityUpdater;
 import org.opentripplanner.updater.vehicle_parking.VehicleParkingDataSourceFactory;
 import org.opentripplanner.updater.vehicle_parking.VehicleParkingUpdater;
 import org.opentripplanner.updater.vehicle_position.PollingVehiclePositionUpdater;
 import org.opentripplanner.updater.vehicle_rental.VehicleRentalUpdater;
 import org.opentripplanner.updater.vehicle_rental.datasources.VehicleRentalDataSourceFactory;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 
 /**
  * Sets up and starts all the graph updaters.
@@ -39,8 +43,6 @@ import org.slf4j.LoggerFactory;
  * GraphUpdaterManager.
  */
 public class UpdaterConfigurator {
-
-  private static final Logger LOG = LoggerFactory.getLogger(UpdaterConfigurator.class);
 
   private final Graph graph;
   private final TransitModel transitModel;
@@ -93,7 +95,19 @@ public class UpdaterConfigurator {
       )
     );
 
-    GraphUpdaterManager updaterManager = new GraphUpdaterManager(graph, transitModel, updaters);
+    TimetableSnapshot timetableSnapshotBuffer = null;
+    if (siriTimetableSnapshotSource != null) {
+      timetableSnapshotBuffer = siriTimetableSnapshotSource.getTimetableSnapshotBuffer();
+    } else if (gtfsTimetableSnapshotSource != null) {
+      timetableSnapshotBuffer = gtfsTimetableSnapshotSource.getTimetableSnapshotBuffer();
+    }
+    GraphUpdaterManager updaterManager = new GraphUpdaterManager(
+      new DefaultRealTimeUpdateContext(graph, transitModel, timetableSnapshotBuffer),
+      updaters
+    );
+
+    configureTimetableSnapshotFlush(updaterManager);
+
     updaterManager.startUpdaters();
 
     // Stop the updater manager if it contains nothing
@@ -156,46 +170,53 @@ public class UpdaterConfigurator {
       updaters.add(new GtfsRealtimeAlertsUpdater(configItem, transitModel));
     }
     for (var configItem : updatersParameters.getPollingStoptimeUpdaterParameters()) {
-      updaters.add(
-        new PollingTripUpdater(configItem, transitModel, provideGtfsTimetableSnapshot())
-      );
+      updaters.add(new PollingTripUpdater(configItem, provideGtfsTimetableSnapshot()));
     }
     for (var configItem : updatersParameters.getVehiclePositionsUpdaterParameters()) {
-      updaters.add(
-        new PollingVehiclePositionUpdater(configItem, realtimeVehicleRepository, transitModel)
-      );
+      updaters.add(new PollingVehiclePositionUpdater(configItem, realtimeVehicleRepository));
     }
     for (var configItem : updatersParameters.getSiriETUpdaterParameters()) {
-      updaters.add(new SiriETUpdater(configItem, transitModel, provideSiriTimetableSnapshot()));
+      updaters.add(new SiriETUpdater(configItem, provideSiriTimetableSnapshot()));
     }
     for (var configItem : updatersParameters.getSiriETGooglePubsubUpdaterParameters()) {
-      updaters.add(
-        new SiriETGooglePubsubUpdater(configItem, transitModel, provideSiriTimetableSnapshot())
-      );
+      updaters.add(new SiriETGooglePubsubUpdater(configItem, provideSiriTimetableSnapshot()));
     }
     for (var configItem : updatersParameters.getSiriSXUpdaterParameters()) {
       updaters.add(new SiriSXUpdater(configItem, transitModel));
     }
     for (var configItem : updatersParameters.getMqttGtfsRealtimeUpdaterParameters()) {
-      updaters.add(
-        new MqttGtfsRealtimeUpdater(configItem, transitModel, provideGtfsTimetableSnapshot())
-      );
+      updaters.add(new MqttGtfsRealtimeUpdater(configItem, provideGtfsTimetableSnapshot()));
     }
     for (var configItem : updatersParameters.getVehicleParkingUpdaterParameters()) {
-      var source = VehicleParkingDataSourceFactory.create(configItem, openingHoursCalendarService);
-      updaters.add(
-        new VehicleParkingUpdater(
-          configItem,
-          source,
-          graph.getLinker(),
-          graph.getVehicleParkingService()
-        )
-      );
+      switch (configItem.updateType()) {
+        case FULL -> {
+          var source = VehicleParkingDataSourceFactory.create(
+            configItem,
+            openingHoursCalendarService
+          );
+          updaters.add(
+            new VehicleParkingUpdater(
+              configItem,
+              source,
+              graph.getLinker(),
+              graph.getVehicleParkingService()
+            )
+          );
+        }
+        case AVAILABILITY_ONLY -> {
+          var source = AvailabilityDatasourceFactory.create(configItem);
+          updaters.add(
+            new VehicleParkingAvailabilityUpdater(
+              configItem,
+              source,
+              graph.getVehicleParkingService()
+            )
+          );
+        }
+      }
     }
     for (var configItem : updatersParameters.getSiriAzureETUpdaterParameters()) {
-      updaters.add(
-        new SiriAzureETUpdater(configItem, transitModel, provideSiriTimetableSnapshot())
-      );
+      updaters.add(new SiriAzureETUpdater(configItem, provideSiriTimetableSnapshot()));
     }
     for (var configItem : updatersParameters.getSiriAzureSXUpdaterParameters()) {
       updaters.add(new SiriAzureSXUpdater(configItem, transitModel));
@@ -222,5 +243,22 @@ public class UpdaterConfigurator {
         new TimetableSnapshotSource(updatersParameters.timetableSnapshotParameters(), transitModel);
     }
     return gtfsTimetableSnapshotSource;
+  }
+
+  /**
+   * If SIRI or GTFS real-time updaters are in use, configure a periodic flush of the timetable
+   * snapshot.
+   */
+  private void configureTimetableSnapshotFlush(GraphUpdaterManager updaterManager) {
+    if (siriTimetableSnapshotSource != null || gtfsTimetableSnapshotSource != null) {
+      updaterManager
+        .getScheduler()
+        .scheduleWithFixedDelay(
+          new TimetableSnapshotFlush(siriTimetableSnapshotSource, gtfsTimetableSnapshotSource),
+          0,
+          updatersParameters.timetableSnapshotParameters().maxSnapshotFrequency().toSeconds(),
+          TimeUnit.SECONDS
+        );
+    }
   }
 }

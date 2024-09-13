@@ -1,16 +1,12 @@
 package org.opentripplanner.updater.vehicle_position;
 
 import com.google.transit.realtime.GtfsRealtime.VehiclePosition;
-import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
+import java.util.Set;
 import org.opentripplanner.framework.tostring.ToStringBuilder;
 import org.opentripplanner.service.realtimevehicles.RealtimeVehicleRepository;
-import org.opentripplanner.transit.model.network.TripPattern;
-import org.opentripplanner.transit.model.timetable.Trip;
-import org.opentripplanner.transit.service.DefaultTransitService;
-import org.opentripplanner.transit.service.TransitModel;
-import org.opentripplanner.updater.GtfsRealtimeFuzzyTripMatcher;
+import org.opentripplanner.service.realtimevehicles.model.RealtimeVehicle;
+import org.opentripplanner.standalone.config.routerconfig.updaters.VehiclePositionsUpdaterConfig;
 import org.opentripplanner.updater.spi.PollingGraphUpdater;
 import org.opentripplanner.updater.spi.WriteToGraphCallback;
 import org.slf4j.Logger;
@@ -18,7 +14,7 @@ import org.slf4j.LoggerFactory;
 
 /**
  * Map vehicle positions to
- * {@link org.opentripplanner.service.realtimevehicles.model.RealtimeVehicle} and add them to OTP
+ * {@link RealtimeVehicle} and add them to OTP
  * patterns via a GTFS-RT source.
  */
 public class PollingVehiclePositionUpdater extends PollingGraphUpdater {
@@ -29,37 +25,27 @@ public class PollingVehiclePositionUpdater extends PollingGraphUpdater {
    * Update streamer
    */
   private final GtfsRealtimeHttpVehiclePositionSource vehiclePositionSource;
-
-  private final RealtimeVehiclePatternMatcher realtimeVehiclePatternMatcher;
+  private final Set<VehiclePositionsUpdaterConfig.VehiclePositionFeature> vehiclePositionFeatures;
 
   /**
    * Parent update manager. Is used to execute graph writer runnables.
    */
   private WriteToGraphCallback saveResultOnGraph;
+  private final String feedId;
+  private final RealtimeVehicleRepository realtimeVehicleRepository;
+  private final boolean fuzzyTripMatching;
 
   public PollingVehiclePositionUpdater(
     VehiclePositionsUpdaterParameters params,
-    RealtimeVehicleRepository realtimeVehicleRepository,
-    TransitModel transitModel
+    RealtimeVehicleRepository realtimeVehicleRepository
   ) {
     super(params);
     this.vehiclePositionSource =
       new GtfsRealtimeHttpVehiclePositionSource(params.url(), params.headers());
-    var index = transitModel.getTransitModelIndex();
-    var fuzzyTripMatcher = params.fuzzyTripMatching()
-      ? new GtfsRealtimeFuzzyTripMatcher(new DefaultTransitService(transitModel))
-      : null;
-    this.realtimeVehiclePatternMatcher =
-      new RealtimeVehiclePatternMatcher(
-        params.feedId(),
-        tripId -> index.getTripForId().get(tripId),
-        trip -> index.getPatternForTrip().get(trip),
-        (trip, date) -> getPatternIncludingRealtime(transitModel, trip, date),
-        realtimeVehicleRepository,
-        transitModel.getTimeZone(),
-        fuzzyTripMatcher,
-        params.vehiclePositionFeatures()
-      );
+    this.realtimeVehicleRepository = realtimeVehicleRepository;
+    this.feedId = params.feedId();
+    this.fuzzyTripMatching = params.fuzzyTripMatching();
+    this.vehiclePositionFeatures = params.vehiclePositionFeatures();
 
     LOG.info(
       "Creating vehicle position updater running every {}: {}",
@@ -84,7 +70,13 @@ public class PollingVehiclePositionUpdater extends PollingGraphUpdater {
 
     if (updates != null) {
       // Handle updating trip positions via graph writer runnable
-      var runnable = new VehiclePositionUpdaterRunnable(updates, realtimeVehiclePatternMatcher);
+      var runnable = new VehiclePositionUpdaterRunnable(
+        realtimeVehicleRepository,
+        vehiclePositionFeatures,
+        feedId,
+        fuzzyTripMatching,
+        updates
+      );
       saveResultOnGraph.execute(runnable);
     }
   }
@@ -92,16 +84,5 @@ public class PollingVehiclePositionUpdater extends PollingGraphUpdater {
   @Override
   public String toString() {
     return ToStringBuilder.of(this.getClass()).addObj("source", vehiclePositionSource).toString();
-  }
-
-  private static TripPattern getPatternIncludingRealtime(
-    TransitModel transitModel,
-    Trip trip,
-    LocalDate sd
-  ) {
-    return Optional
-      .ofNullable(transitModel.getTimetableSnapshot())
-      .map(snapshot -> snapshot.getRealtimeAddedTripPattern(trip.getId(), sd))
-      .orElseGet(() -> transitModel.getTransitModelIndex().getPatternForTrip().get(trip));
   }
 }
