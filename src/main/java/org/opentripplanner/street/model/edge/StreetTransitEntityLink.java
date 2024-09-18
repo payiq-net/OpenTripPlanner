@@ -1,5 +1,6 @@
 package org.opentripplanner.street.model.edge;
 
+import java.util.Objects;
 import javax.annotation.Nonnull;
 import org.locationtech.jts.geom.Coordinate;
 import org.locationtech.jts.geom.LineString;
@@ -8,10 +9,12 @@ import org.opentripplanner.framework.i18n.I18NString;
 import org.opentripplanner.framework.tostring.ToStringBuilder;
 import org.opentripplanner.routing.api.request.preference.RoutingPreferences;
 import org.opentripplanner.street.model.vertex.StreetVertex;
+import org.opentripplanner.street.model.vertex.TransitStopVertex;
 import org.opentripplanner.street.model.vertex.Vertex;
 import org.opentripplanner.street.search.state.State;
 import org.opentripplanner.street.search.state.StateEditor;
 import org.opentripplanner.transit.model.basic.Accessibility;
+import org.opentripplanner.transit.model.site.RegularStop;
 
 /**
  * This represents the connection between a street vertex and a transit vertex.
@@ -86,6 +89,24 @@ public abstract class StreetTransitEntityLink<T extends Vertex>
       }
     }
 
+    if (tov instanceof TransitStopVertex) {
+      TransitStopVertex tsv = (TransitStopVertex) tov;
+      RegularStop stop = tsv.getStop();
+      if (stop != null) {
+        // Add 6 minutes for tram stop HSL:1203418/H0239/Länsiterm. T2
+        if (Objects.equals(stop.getCode(), "H0239")) {
+          s1.incrementTimeInSeconds(300);
+        }
+        // Add 6 minutes for tram stop H0236/Länsiterm. T1
+        if (Objects.equals(stop.getCode(), "H0236")) {
+          s1.incrementTimeInSeconds(300);
+        }
+        // Add 6 minutes for tram stop H0297/Huutokonttori
+        if (Objects.equals(stop.getCode(), "H0297")) {
+          s1.incrementTimeInSeconds(300);
+        }
+      }
+    }
     return switch (s0.currentMode()) {
       case BICYCLE, SCOOTER -> {
         // Forbid taking your own bike in the station if bike P+R activated.
