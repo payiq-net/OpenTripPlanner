@@ -91,20 +91,8 @@ public abstract class StreetTransitEntityLink<T extends Vertex>
 
     if (tov instanceof TransitStopVertex) {
       TransitStopVertex tsv = (TransitStopVertex) tov;
-      RegularStop stop = tsv.getStop();
-      if (stop != null) {
-        // Add 6 minutes for tram stop HSL:1203418/H0239/Länsiterm. T2
-        if (Objects.equals(stop.getCode(), "H0239")) {
-          s1.incrementTimeInSeconds(300);
-        }
-        // Add 6 minutes for tram stop H0236/Länsiterm. T1
-        if (Objects.equals(stop.getCode(), "H0236")) {
-          s1.incrementTimeInSeconds(300);
-        }
-        // Add 6 minutes for tram stop H0297/Huutokonttori
-        if (Objects.equals(stop.getCode(), "H0297")) {
-          s1.incrementTimeInSeconds(300);
-        }
+      if (tsv.getStreetToStopTime() > 0) {
+        s1.incrementTimeInSeconds(tsv.getStreetToStopTime());
       }
     }
     return switch (s0.currentMode()) {
