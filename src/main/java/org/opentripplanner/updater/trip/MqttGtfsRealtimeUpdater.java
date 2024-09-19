@@ -20,6 +20,7 @@ import org.opentripplanner.framework.tostring.ToStringBuilder;
 import org.opentripplanner.updater.spi.GraphUpdater;
 import org.opentripplanner.updater.spi.UpdateResult;
 import org.opentripplanner.updater.spi.WriteToGraphCallback;
+import org.opentripplanner.updater.trip.StopGraphWriterRunnable;
 import org.opentripplanner.updater.trip.metrics.TripUpdateMetrics;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -134,7 +135,8 @@ public class MqttGtfsRealtimeUpdater implements GraphUpdater {
 
     @Override
     public void messageArrived(String topic, MqttMessage message) {
-      List<GtfsRealtime.TripUpdate> updates = null;
+      List<GtfsRealtime.TripUpdate> tripUpdates = null;
+      List<GtfsRealtime.Stop> stopUpdates = null;
       UpdateIncrementality updateIncrementality = FULL_DATASET;
       try {
         // Decode message
@@ -156,17 +158,22 @@ public class MqttGtfsRealtimeUpdater implements GraphUpdater {
         }
 
         // Create List of TripUpdates
-        updates = new ArrayList<>(feedEntityList.size());
+        tripUpdates = new ArrayList<>(feedEntityList.size());
+        stopUpdates = new ArrayList<>(feedEntityList.size());
         for (GtfsRealtime.FeedEntity feedEntity : feedEntityList) {
           if (feedEntity.hasTripUpdate()) {
-            updates.add(feedEntity.getTripUpdate());
+            tripUpdates.add(feedEntity.getTripUpdate());
+          }
+          if (feedEntity.hasStop()) {
+            GtfsRealtime.Stop stopUpdate = feedEntity.getStop();
+            stopUpdates.add(feedEntity.getStop());
           }
         }
       } catch (InvalidProtocolBufferException e) {
         LOG.error("Could not decode gtfs-rt message:", e);
       }
 
-      if (updates != null) {
+      if (tripUpdates != null && !tripUpdates.isEmpty()) {
         // Handle trip updates via graph writer runnable
         saveResultOnGraph.execute(
           new TripUpdateGraphWriterRunnable(
@@ -174,11 +181,14 @@ public class MqttGtfsRealtimeUpdater implements GraphUpdater {
             fuzzyTripMatching,
             backwardsDelayPropagationType,
             updateIncrementality,
-            updates,
+            tripUpdates,
             feedId,
             recordMetrics
           )
         );
+      }
+      if (stopUpdates != null && !stopUpdates.isEmpty()) {
+        saveResultOnGraph.execute(new StopGraphWriterRunnable(stopUpdates, feedId));
       }
     }
 
